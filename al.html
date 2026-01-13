@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>A* Pathfinding Visualizer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#f6f8fb;
+      --panel:#ffffff;
+      --muted:#8793a6;
+      --accent:#2b8cff;
+      --grid-gap:1px;
+      --cell-size:22px;
+    }
+    *{box-sizing:border-box;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif}
+    body{
+      margin:0;
+      background:var(--bg);
+      display:flex;
+      min-height:100vh;
+      align-items:flex-start;
+      gap:24px;
+      padding:28px;
+    }
+
+    /* left: canvas */
+    .board {
+      background:var(--panel);
+      border-radius:12px;
+      padding:18px;
+      box-shadow:0 6px 20px rgba(20,30,60,0.08);
+    }
+    #grid {
+      display:grid;
+      grid-template-columns: repeat(30, var(--cell-size));
+      grid-auto-rows: var(--cell-size);
+      gap: var(--grid-gap);
+      background: #dfe6ee;
+      padding:6px;
+      border-radius:8px;
+      user-select:none;
+    }
+    .cell {
+      width:var(--cell-size);
+      height:var(--cell-size);
+      background:#ffffff;
+      border-radius:4px;
+      transition: background 120ms linear;
+    }
+    .cell.wall { background:#222; }
+    .cell.start { background:#00c853; }        /* green */
+    .cell.end { background:#ff6d00; }          /* orange */
+    .cell.open { background:#8ecbff; }         /* light blue */
+    .cell.closed { background:#ff8a80; }       /* light red */
+    .cell.path { background:#ffd54f; }         /* yellow */
+
+    /* right: controls */
+    .controls {
+      min-width:320px;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      align-items:stretch;
+    }
+    .panel {
+      background:var(--panel);
+      border-radius:10px;
+      padding:12px;
+      box-shadow:0 6px 20px rgba(20,30,60,0.05);
+    }
+    h2 { margin:0 0 8px 0; font-size:16px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    button, select, input[type="range"] {
+      font-size:14px;
+      padding:8px 10px;
+      border-radius:8px;
+      border:1px solid #e6eef8;
+      background:#fff;
+      cursor:pointer;
+    }
+    button.primary {
+      background:var(--accent); color:#fff; border:none;
+    }
+    small { color:var(--muted); }
+
+    .legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .legend .item { display:flex; gap:6px; align-items:center; font-size:13px; color:var(--muted); }
+    .swatch { width:16px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,0.06) }
+
+    footer { margin-top:12px; font-size:13px; color:var(--muted) }
+  </style>
+</head>
+<body>
+  <div class="board panel">
+    <h2>A* Pathfinding Visualizer</h2>
+    <div id="grid" aria-label="pathfinding grid"></div>
+    <footer><small>Click to place walls. S = set start, E = set end, Space = run, C = clear walls, R = reset</small></footer>
+  </div>
+
+  <div class="controls">
+    <div class="panel">
+      <div class="row">
+        <button id="btn-start" class="primary">Run A*</button>
+        <button id="btn-clear">Clear Walls</button>
+        <button id="btn-reset">Reset All</button>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="row" style="align-items:center">
+        <label for="heuristic"><small>Heuristic</small></label>
+        <select id="heuristic">
+          <option value="manhattan">Manhattan</option>
+          <option value="euclidean">Euclidean</option>
+        </select>
+        <label style="margin-left:8px"><small>Speed</small></label>
+        <input id="speed" type="range" min="0" max="200" value="20" step="10" />
+        <small id="speedLabel">Delay: 20ms</small>
+      </div>
+
+      <div style="height:10px"></div>
+      <div class="legend">
+        <div class="item"><span class="swatch" style="background:#00c853"></span> Start</div>
+        <div class="item"><span class="swatch" style="background:#ff6d00"></span> End</div>
+        <div class="item"><span class="swatch" style="background:#222"></span> Wall</div>
+        <div class="item"><span class="swatch" style="background:#8ecbff"></span> Open</div>
+        <div class="item"><span class="swatch" style="background:#ff8a80"></span> Closed</div>
+        <div class="item"><span class="swatch" style="background:#ffd54f"></span> Path</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Controls</h2>
+      <div style="display:grid;gap:6px">
+        <div><small><strong>Mouse:</strong> Left-click/drag to add walls, Right-click to erase</small></div>
+        <div><small><strong>Keyboard:</strong> S (set start), E (set end), Space (run), C (clear walls), R (reset)</small></div>
+      </div>
+    </div>
+
+    <div class="panel" id="infoPanel">
+      <h2>Info</h2>
+      <div id="infoText"><small>Ready</small></div>
+    </div>
+  </div>
+
+<script>
+/* --- Config --- */
+const COLS = 30;
+const ROWS = 30;
+const gridEl = document.getElementById('grid');
+const btnStart = document.getElementById('btn-start');
+const btnClear = document.getElementById('btn-clear');
+const btnReset = document.getElementById('btn-reset');
+const heuristicSelect = document.getElementById('heuristic');
+const speedRange = document.getElementById('speed');
+const speedLabel = document.getElementById('speedLabel');
+const infoText = document.getElementById('infoText');
+
+let isMouseDown = false;
+let mouseMode = 'draw'; // draw or erase
+let setStartMode = false;
+let setEndMode = false;
+let startCell = null;
+let endCell = null;
+let running = false;
+
+/* --- Node creation --- */
+const grid = [];
+function createGrid(){
+  gridEl.innerHTML = '';
+  grid.length = 0;
+  gridEl.style.gridTemplateColumns = `repeat(${COLS}, var(--cell-size))`;
+  for(let r=0;r<ROWS;r++){
+    const row = [];
+    for(let c=0;c<COLS;c++){
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.r = r;
+      cell.dataset.c = c;
+      cell.dataset.wall = '0';
+      cell.dataset.g = Infinity;
+      cell.dataset.h = 0;
+      cell.dataset.f = Infinity;
+      cell.dataset.prev = '';
+      cell.addEventListener('mousedown', onCellMouseDown);
+      cell.addEventListener('mouseenter', onCellMouseEnter);
+      cell.addEventListener('mouseup', onCellMouseUp);
+      cell.addEventListener('contextmenu', (e)=>e.preventDefault());
+      gridEl.appendChild(cell);
+      row.push(cell);
+    }
+    grid.push(row);
+  }
+}
+
+function setCellWall(cell, wall){
+  if(cell === startCell || cell === endCell) return;
+  cell.dataset.wall = wall ? '1' : '0';
+  cell.classList.toggle('wall', wall);
+}
+
+/* --- Mouse handlers --- */
+function onCellMouseDown(e){
+  if (running) return;
+  isMouseDown = true;
+  const cell = e.currentTarget;
+  if(e.button === 2){ // right click -> erase
+    mouseMode = 'erase';
+    setCellWall(cell,false);
+  } else { // left click
+    if(setStartMode){
+      if(startCell) startCell.classList.remove('start');
+      startCell = cell;
+      startCell.classList.add('start');
+      setStartMode = false;
+      info('Start set');
+      return;
+    }
+    if(setEndMode){
+      if(endCell) endCell.classList.remove('end');
+      endCell = cell;
+      endCell.classList.add('end');
+      setEndMode = false;
+      info('End set');
+      return;
+    }
+    mouseMode = 'draw';
+    setCellWall(cell,true);
+  }
+}
+function onCellMouseEnter(e){
+  if (running) return;
+  if(!isMouseDown) return;
+  const cell = e.currentTarget;
+  setCellWall(cell, mouseMode === 'draw');
+}
+function onCellMouseUp(e){
+  isMouseDown = false;
+}
+
+/* --- Utility functions --- */
+function resetGridStates(){
+  for(const row of grid){
+    for(const cell of row){
+      cell.classList.remove('open','closed','path');
+      cell.dataset.g = Infinity;
+      cell.dataset.h = 0;
+      cell.dataset.f = Infinity;
+      cell.dataset.prev = '';
+      if(cell.dataset.wall === '1') cell.classList.add('wall');
+      else cell.classList.remove('wall');
+    }
+  }
+  if(startCell) startCell.classList.add('start');
+  if(endCell) endCell.classList.add('end');
+}
+function clearWalls(){
+  for(const row of grid){
+    for(const cell of row){
+      if(cell !== startCell && cell !== endCell){
+        setCellWall(cell,false);
+      }
+    }
+  }
+  resetGridStates();
+}
+function resetAll(){
+  startCell = null; endCell = null;
+  for(const row of grid){
+    for(const cell of row){
+      cell.className = 'cell';
+      cell.dataset.wall = '0';
+    }
+  }
+  resetGridStates();
+}
+
+/* --- Heuristics --- */
+function heuristic(aR,aC,bR,bC){
+  const mode = heuristicSelect.value;
+  if(mode === 'manhattan'){
+    return Math.abs(aR-bR) + Math.abs(aC-bC);
+  } else {
+    // Euclidean
+    return Math.hypot(aR-bR, aC-bC);
+  }
+}
+
+/* --- A* Implementation --- */
+function neighborsOf(r,c){
+  const n = [];
+  // Up, Down, Left, Right (4-way)
+  if(r>0) n.push(grid[r-1][c]);
+  if(r<ROWS-1) n.push(grid[r+1][c]);
+  if(c>0) n.push(grid[r][c-1]);
+  if(c<COLS-1) n.push(grid[r][c+1]);
+  return n;
+}
+
+function sleep(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+async function runAStar(){
+  if(!startCell || !endCell){ info('Set start and end first'); return; }
+  running = true;
+  info('Running...');
+  resetGridStates();
+
+  // initialize
+  const openSet = [];
+  const startR = +startCell.dataset.r, startC = +startCell.dataset.c;
+  const endR = +endCell.dataset.r, endC = +endCell.dataset.c;
+
+  startCell.dataset.g = 0;
+  startCell.dataset.h = heuristic(startR,startC,endR,endC);
+  startCell.dataset.f = (+startCell.dataset.g) + (+startCell.dataset.h);
+  openSet.push(startCell);
+
+  const openSetSet = new Set([startCell]);
+
+  const delay = +speedRange.value;
+
+  while(openSet.length){
+    // find node in openSet with lowest f
+    openSet.sort((a,b)=> (+a.dataset.f) - (+b.dataset.f) );
+    const current = openSet.shift();
+    openSetSet.delete(current);
+
+    const cr = +current.dataset.r, cc = +current.dataset.c;
+
+    if(current === endCell){
+      // reconstruct path
+      let cur = endCell;
+      while(cur && cur.dataset.prev){
+        const prev = cur.dataset.prev ? JSON.parse(cur.dataset.prev) : null;
+        if(!prev) break;
+        const pr = prev.r, pc = prev.c;
+        const prevCell = grid[pr][pc];
+        if(prevCell !== startCell) prevCell.classList.add('path');
+        cur = prevCell;
+      }
+      info('Path found!');
+      running = false;
+      return;
+    }
+
+    // mark current closed
+    if(current !== startCell) current.classList.add('closed');
+
+    const neighbors = neighborsOf(cr,cc);
+    for(const nb of neighbors){
+      if(nb.dataset.wall === '1') continue;
+      if(nb === startCell) continue;
+
+      const tentative_g = (+current.dataset.g) + 1; // uniform cost
+      if(tentative_g < (+nb.dataset.g)){
+        nb.dataset.prev = JSON.stringify({r:cr,c:cc});
+        nb.dataset.g = tentative_g;
+        const nbR = +nb.dataset.r, nbC = +nb.dataset.c;
+        nb.dataset.h = heuristic(nbR, nbC, endR, endC);
+        nb.dataset.f = (+nb.dataset.g) + (+nb.dataset.h);
+
+        if(!openSetSet.has(nb)){
+          openSet.push(nb);
+          openSetSet.add(nb);
+          if(nb !== endCell) nb.classList.add('open');
+        }
+      }
+    }
+
+    // visual delay
+    await sleep(delay);
+  }
+
+  info('No path found');
+  running = false;
+}
+
+/* --- UI wiring --- */
+createGrid();
+
+btnStart.addEventListener('click', async ()=>{
+  if(running) return;
+  await runAStar();
+});
+btnClear.addEventListener('click', ()=>{
+  if(running) return;
+  clearWalls();
+  info('Walls cleared');
+});
+btnReset.addEventListener('click', ()=>{
+  if(running) return;
+  resetAll();
+  info('Reset complete');
+});
+speedRange.addEventListener('input', ()=>{
+  speedLabel.textContent = 'Delay: ' + speedRange.value + 'ms';
+});
+
+window.addEventListener('mouseup', ()=> isMouseDown = false);
+window.addEventListener('keydown', (e)=>{
+  if(running) return;
+  if(e.key === 's' || e.key === 'S'){
+    setStartMode = true;
+    setEndMode = false;
+    info('Click a cell to set START');
+  } else if(e.key === 'e' || e.key === 'E'){
+    setEndMode = true;
+    setStartMode = false;
+    info('Click a cell to set END');
+  } else if(e.key === ' '){ // space
+    e.preventDefault();
+    btnStart.click();
+  } else if(e.key === 'c' || e.key === 'C'){
+    btnClear.click();
+  } else if(e.key === 'r' || e.key === 'R'){
+    btnReset.click();
+  }
+});
+
+/* handle clicks for setting start/end and right-click erase */
+gridEl.addEventListener('click', (ev)=>{
+  if(running) return;
+  const target = ev.target;
+  if(!target.classList.contains('cell')) return;
+  if(setStartMode){
+    if(startCell) startCell.classList.remove('start');
+    startCell = target;
+    startCell.classList.add('start');
+    setStartMode = false;
+    info('Start placed');
+    return;
+  }
+  if(setEndMode){
+    if(endCell) endCell.classList.remove('end');
+    endCell = target;
+    endCell.classList.add('end');
+    setEndMode = false;
+    info('End placed');
+    return;
+  }
+});
+gridEl.addEventListener('contextmenu', (ev)=>{
+  ev.preventDefault();
+  if(running) return;
+  const target = ev.target;
+  if(!target.classList.contains('cell')) return;
+  setCellWall(target,false);
+});
+
+/* allow click+drag drawing using global mouse events */
+gridEl.addEventListener('mousedown', (ev)=>{
+  isMouseDown = true;
+  const target = ev.target;
+  if(!target.classList.contains('cell')) return;
+  if(ev.button === 2){
+    mouseMode = 'erase';
+    setCellWall(target,false);
+  } else {
+    if(setStartMode || setEndMode) return;
+    mouseMode = 'draw';
+    setCellWall(target,true);
+  }
+});
+gridEl.addEventListener('mousemove', (ev)=>{
+  if(!isMouseDown) return;
+  const target = ev.target;
+  if(!target.classList.contains('cell')) return;
+  setCellWall(target, mouseMode === 'draw');
+});
+
+/* info helper */
+function info(text){
+  infoText.innerHTML = `<small>${text}</small>`;
+}
+
+/* quick initial example: place start & end */
+(function seedExample(){
+  const s = grid[4][4], e = grid[24][24];
+  startCell = s; endCell = e;
+  s.classList.add('start');
+  e.classList.add('end');
+  info('Ready — try drawing walls and press Space');
+})();
+
+</script>
+</body>
+</html>
